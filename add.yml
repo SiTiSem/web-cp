@@ -1,0 +1,91 @@
+---
+ - hosts: 'all'
+   gather_facts: no
+   vars_files: 
+    - 'vars/main.yml' 
+   vars_prompt:
+    - name: 'username'
+      prompt: 'Username'
+      private: no
+    - name: 'userpass'
+      prompt: 'Password'
+      private: no
+      # encrypt: "sha512_crypt"
+    - name: 'mysql_user_pass'
+      prompt: 'MySQL password'
+      private: no
+    - name: 'domain'
+      prompt: 'Domain'
+      private: no
+    - name: 'cms'
+      prompt: 'CMS'
+      private: no
+      default: 'none'
+
+   tasks: 
+
+    - name: 'Add Group'
+      group: 'name=chusers'
+
+    - name: 'Add user'
+      user: 'name={{ username }} password={{userpass |password_hash("sha512") }} update_password=on_create shell=/bin/bash move_home=yes home=/var/www/{{ username }} groups=chusers'
+
+    - name: 'Add MySQL DB'
+      mysql_db: 'name={{ username }} encoding=utf8 login_user=root login_password={{ mysql_root_pass }} state=present'
+
+    - name: 'Add MySQL user'
+      mysql_user: 'name={{ username }} password={{ mysql_user_pass }} priv={{ username }}.*:ALL login_user=root login_password={{ mysql_root_pass }} state=present'
+
+    - name: 'Add apache2 host' 
+      template: 'src=templates/apache2/vhost.conf.j2 dest=/etc/apache2/sites-available/{{ username }}.conf'
+      notify:
+       - 'apache2 reload'      
+
+    - name: 'Enable apache2 host' 
+      command: 'a2ensite {{ username }}'
+      notify:
+       - 'apache2 reload'   
+
+    - name: 'Add folders'
+      action: 'file path={{ item }} state=directory owner={{ username }}'
+      with_items:
+       - /var/www/{{ username }}/www
+       - /var/www/{{ username }}/logs
+       - /var/www/{{ username }}/tmp
+
+    - name: 'Chroot'
+      shell: 'make_chroot_jail.sh update /bin/bash /var/www'
+
+    - name: 'Chroot User Path'
+      file: 'path=/var/www/{{ username }} owner=root mode=0755'
+
+    #- name: 'Chroot User WWW Path'
+    #  file: 'path=/var/www/{{ username }}/www mode=0775'
+
+    - include: cms/{{ cms }}/main.yml
+      when: cms != ''
+
+    - name: 'Add nginx host'     
+      template: 'src=templates/nginx/user.j2 dest=/etc/nginx/sites-available/{{ username }}'
+      notify:
+       - 'nginx reload'
+
+    - name: 'Ссылка на nginx host'   
+      file: 'src=/etc/nginx/sites-available/{{ username }} dest=/etc/nginx/sites-enabled/{{ username }} state=link'
+      notify:
+       - 'nginx reload'
+
+    # - name: 'Add php-fpm pool'     
+    #   template: 'src=templates/php-fpm/user.conf.j2 dest=/etc/php5/fpm/pool.d/{{ username }}.conf'
+    #   notify:
+    #    - 'php-fpm restart'
+    # - name: 'Quota'
+    #   raw: 'quotatool -u {{ username }} -b -q 50M -l 50M /'
+       
+##################### Handlers #######################
+
+   handlers:
+    - name: 'apache2 reload'
+      service: 'name=apache2 state=reloaded'
+    - name: 'nginx reload'
+      service: 'name=nginx state=reloaded'
